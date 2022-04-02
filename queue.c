@@ -224,112 +224,19 @@ merge(void *priv, list_cmp_func_t cmp, struct list_head *a, struct list_head *b)
     return head;
 }
 
-/*
- * Combine final list merge with restoration of standard doubly-linked
- * list structure.  This approach duplicates code from merge(), but
- * runs faster than the tidier alternatives of either a separate final
- * prev-link restoration pass, or maintaining the prev links
- * throughout.
- */
-__attribute__((nonnull(2, 3, 4, 5))) static void merge_final(
-    void *priv,
-    list_cmp_func_t cmp,
-    struct list_head *head,
-    struct list_head *a,
-    struct list_head *b)
+/*My q_sort function*/
+void my_q_sort(void *priv, struct list_head *head, list_cmp_func_t cmp)
 {
-    struct list_head *tail = head;
-    u8 count = 0;
+    struct list_head *node = head->prev, *pending = NULL;
+    int count = 0;
 
-    for (;;) {
-        /* if equal, take 'a' -- important for sort stability */
-        if (cmp(priv, a, b) <= 0) {
-            tail->next = a;
-            a->prev = tail;
-            tail = a;
-            a = a->next;
-            if (!a)
-                break;
-        } else {
-            tail->next = b;
-            b->prev = tail;
-            tail = b;
-            b = b->next;
-            if (!b) {
-                b = a;
-                break;
-            }
-        }
-    }
-
-    /* Finish linking remainder of list b on to tail */
-    tail->next = b;
-    do {
-        /*
-         * If the merge is highly unbalanced (e.g. the input is
-         * already sorted), this loop may run many iterations.
-         * Continue callbacks to the client even though no
-         * element comparison is needed, so the client's cmp()
-         * routine can invoke cond_resched() periodically.
-         */
-        if (unlikely(!++count))
-            cmp(priv, b, b);
-        b->prev = tail;
-        tail = b;
-        b = b->next;
-    } while (b);
-
-    /* And the final links to make a circular doubly-linked list */
-    tail->next = head;
-    head->prev = tail;
-}
-
-/**
- * list_sort - sort a list
- * @priv: private data, opaque to list_sort(), passed to @cmp
- * @head: the list to sort
- * @cmp: the elements comparison function
- *
- * The comparison function @cmp must return > 0 if @a should sort after
- * @b ("@a > @b" if you want an ascending sort), and <= 0 if @a should
- * sort before @b *or* their original order should be preserved.  It is
- * always called with the element that came first in the input in @a,
- * and list_sort is a stable sort, so it is not necessary to distinguish
- * the @a < @b and @a == @b cases.
- */
-__attribute__((nonnull(2, 3))) void list_sort(void *priv,
-                                              struct list_head *head,
-                                              list_cmp_func_t cmp)
-{
-    struct list_head *list = head->next, *pending = NULL;
-    size_t count = 0; /* Count of pending */
-
-    if (list == head->prev) /* Zero or one elements */
+    if (node == head->next) /* Zero or one elements */
         return;
 
-    /* Convert to a null-terminated singly-linked list. */
-    head->prev->next = NULL;
+    head->next->prev = NULL;
 
-    /*
-     * Data structure invariants:
-     * - All lists are singly linked and null-terminated; prev
-     *   pointers are not maintained.
-     * - pending is a prev-linked "list of lists" of sorted
-     *   sublists awaiting further merging.
-     * - Each of the sorted sublists is power-of-two in size.
-     * - Sublists are sorted by size and age, smallest & newest at front.
-     * - There are zero to two sublists of each size.
-     * - A pair of pending sublists are merged as soon as the number
-     *   of following pending elements equals their size (i.e.
-     *   each time count reaches an odd multiple of that size).
-     *   That ensures each later final merge will be at worst 2:1.
-     * - Each round consists of:
-     *   - Merging the two sublists selected by the highest bit
-     *     which flips when count is incremented, and
-     *   - Adding an element from the input as a size-1 sublist.
-     */
     do {
-        size_t bits;
+        int bits;
         struct list_head **tail = &pending;
 
         /* Find the least-significant clear bit in count */
@@ -345,32 +252,52 @@ __attribute__((nonnull(2, 3))) void list_sort(void *priv,
             *tail = a;
         }
 
-        /* Move one element from input list to pending */
-        list->prev = pending;
-        pending = list;
-        list = list->next;
-        pending->next = NULL;
+        struct list_head *cur = node, *curhead = node;
+        while (node && node->prev) {
+            if (cmp(priv, node, node->prev) <= 0) {
+                cur->next = node->prev;
+                cur = cur->next;
+                node = node->prev;
+            } else
+                break;
+        }
+        cur->next = NULL;
+        if (node)
+            node = node->prev;
+        curhead->prev = pending;
+        pending = curhead;
         count++;
-    } while (list);
+    } while (node);
 
     /* End of input; merge together all the pending lists. */
-    list = pending;
+    node = pending;
     pending = pending->prev;
     for (;;) {
+        if (!pending)
+            break;
         struct list_head *next = pending->prev;
 
-        if (!next)
-            break;
-        list = merge(priv, cmp, pending, list);
+        node = merge(priv, cmp, pending, node);
         pending = next;
     }
-    /* The final merge, rebuilding prev links */
-    merge_final(priv, cmp, head, pending, list);
+
+    /* Rebuilding prev links */
+    struct list_head *tail = head;
+    while (node) {
+        tail->next = node;
+        node->prev = tail;
+        tail = node;
+        node = node->next;
+    }
+    tail->next = head;
+    head->prev = tail;
 }
 
 /* Sort elements of queue in ascending order */
 void q_sort(struct list_head *head)
 {
-    if (head && !list_empty(head))
-        list_sort(NULL, head, sort_comp);
+    if (!head || list_empty(head))
+        return;
+
+    my_q_sort(NULL, head, sort_comp);
 }
